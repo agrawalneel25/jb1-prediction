@@ -39,19 +39,20 @@ between them, so they behave like real events rather than isolated spikes.
 --
 Trends
 --
+
 For the 50 timesteps before each incident window, a shared stress signal ramps from 0 to 1 and pushes all
-causally-linked sensors upward. 
+linked sensors upward. 
 This creates the inherent predictability that classifiers use.
 
 
-`sensor_d` is given only a tiny stress response, making it a near-distractor.
+`sensor_d` is given only a tiny stress response, making it a distractor.
 A well-trained model should learn to down-weight it.
 
 ---
 
 ## Sliding-window formulation
 
-Raw time series data is not directly consumable by a tabular classifier.
+Raw time series data is not directly consumable.
 `src/windowing.py` converts it into (X, y) pairs:
 
 ```
@@ -60,15 +61,14 @@ timeline:  … ─────────[==========][→→→→→→]─ �
                         input        label
                         window       horizon
 ```
--- till here
+
 - **X[i]** - the sensor readings over the W timesteps ending at position i
 - **y[i]** - 1 if any incident occurs in the next H timesteps, else 0
 
 With W=30 and H=10 on 10,000 timesteps, this produces 9,961 labelled windows.
 
-The "any incident in the next H steps" labelling is deliberate: it gives the
-model a wider target to hit, which makes sense operationally - an alert that
-fires 5 steps before an incident is still useful.
+
+N.b. this has the affect of detecting incidents premptively. Intuitively, this is useful in practice.
 
 ---
 
@@ -80,24 +80,22 @@ summary statistics. Six statistics are computed per sensor:
 | Statistic | What it captures | Why it's included |
 |-----------|-----------------|-------------------|
 | mean      | Average level over the window | Detects sustained baseline shifts during stress build-up |
-| std       | Variability / spread | Elevated variance often precedes instability |
+| std       | spread | Elevated variance often precedes instability |
 | min       | Lowest reading | Catches brief dips that mean/last would smooth over |
-| max       | Highest reading | Catches brief spikes for the same reason |
-| last      | Most recent value before the horizon | Highest recency weight; what the sensor reads right now |
-| slope     | Linear trend (OLS) | Directly encodes whether the sensor is rising toward a threshold |
+| max       | Highest reading | Same as above |
+| last      | Most recent value before the horizon | To predict |
+| slope     | Linear trend | Directly encodes whether the sensor is rising toward a threshold |
 
 With 4 sensors × 6 statistics = **24 features** per window.
 
 These six were chosen because together they cover the three things that matter
 for detecting the pre-incident stress ramp: level (mean, last, min, max),
-volatility (std), and direction (slope). They are also easy to explain without
-domain jargon. More complex features - rolling z-scores, autocorrelation
+volatility (std), and direction (slope). More complex features - rolling z-scores, autocorrelation
 coefficients - would add noise for little gain on a 30-step window.
 
-The slope is the most discriminating feature in this dataset because the
-synthetic stress ramp creates a consistent upward trend in the W steps before
-an incident. Mean and last are the next most useful because they capture
-whether the sensor has already shifted to an elevated baseline.
+The slope is the most discriminating feature in this dataset because the data
+has a consistent upward trend in the W steps before
+an incident. Mean and last are the next most useful.
 
 ---
 
@@ -107,7 +105,7 @@ Two classifiers are available, selectable via `--model`:
 
 **RandomForestClassifier (default)**
 - Handles the 24-column feature table without rescaling
-- Gives feature importances, which act as a sanity check on what the model learned
+- Gives feature importances
 - `class_weight="balanced"` compensates for the ~4% positive rate without oversampling
 - `min_samples_leaf=5` prevents overfitting to noisy leaf nodes
 
@@ -130,10 +128,7 @@ last 20% go to testing. No shuffling.
 
 This matters because adjacent windows share most of their timesteps. A random
 split would leak near-identical windows into both train and test, producing
-inflated metrics that would collapse on real deployment. With W=30, two
-consecutive windows differ by exactly one row - their feature vectors are
-nearly identical. A random split would put one in train and one in test,
-making evaluation trivially easy and completely misleading.
+inflated metrics that would collapse on real deployment. 
 
 ---
 
@@ -192,7 +187,7 @@ threshold  precision  recall    f1   roc_auc  n_alerts  n_positive
      0.90      0.970   0.557  0.707    0.973       127         227
 ```
 
-**Why the threshold choice matters operationally:**
+**Note on choosing threshold in practice:**
 
 - Lowering the threshold (e.g. 0.10 → 0.30) improves recall - more real
   incidents are caught - but precision drops sharply because many more
@@ -203,10 +198,6 @@ threshold  precision  recall    f1   roc_auc  n_alerts  n_positive
 - Raising the threshold (e.g. 0.50 → 0.90) improves precision - fewer false
   alarms - but recall falls. Some real incidents are missed entirely. For a
   safety-critical system, a missed incident is worse than a false alarm.
-
-- Notice that ROC-AUC is constant across all rows. This is expected: it
-  measures ranking quality, not what happens at any particular cut-off. If
-  ROC-AUC were also varying with threshold, something would be wrong.
 
 The right choice depends on the cost asymmetry in the specific domain.
 
@@ -231,7 +222,7 @@ false positives. The model is casting a wide net, not becoming smarter.
 When the threshold falls, windows with moderate probability scores (0.10–0.50)
 start triggering alerts. Most of those windows are not actually pre-incident -
 they just have slightly elevated readings from background noise. This is the
-fundamental precision/recall trade-off made concrete.
+precision/recall trade-off.
 
 **The slope and mean features do most of the work.**
 Feature importance scores from the RandomForest consistently rank
@@ -241,9 +232,9 @@ trend in sensors a, b, and c before each incident. The model found the right
 signal.
 
 **sensor_d contributes little.**
-`sensor_d` was designed as a near-distractor - only weakly affected by stress -
+`sensor_d` was designed as a distractor - only weakly affected by stress -
 and its feature importances confirm this. It appears near the bottom of the
-ranking. If it ranked highly, something would be wrong with the setup.
+ranking.
 
 **LogisticRegression performs noticeably worse.**
 The LR baseline typically scores ROC-AUC ≈ 0.90–0.92 versus RF's ≈ 0.97.
@@ -256,6 +247,8 @@ does not.
 ---
 
 ## Limitations
+
+N.b. would love to discuss potential solutions in an interview ;)
 
 **Synthetic data may not match real operational noise.**
 The stress ramp is perfectly consistent: same shape, same duration, same

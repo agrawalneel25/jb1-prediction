@@ -235,8 +235,11 @@ if __name__ == "__main__":
     import sys
     from pathlib import Path
 
+  # Configure simple console logging so INFO/WARNING messages print cleanly.
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+  # Add the project root to Python's import path so modules from the repo
+# can be imported when this script is run directly.
 
     from data.synthetic_generator import generate_dataset
     from src.features import extract_features
